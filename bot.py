@@ -22,6 +22,7 @@ from firebase_admin import credentials, firestore
 # ==========================================
 BOT_TOKEN = os.environ.get("BOT_TOKEN", "8782856209:AAFyDqj1owGHut0ivuobBJxyg9j2PXpNrW4")
 ADMIN_ID = int(os.environ.get("ADMIN_ID", "6670461311"))
+TARGET_GROUP_ID = -1003963518943  # আপনার দেওয়া টেলিগ্রাম গ্রুপ আইডি
 
 bot = telebot.TeleBot(BOT_TOKEN, parse_mode='HTML')
 try:
@@ -82,7 +83,7 @@ def check_ban(chat_id):
     return user_doc.exists and user_doc.to_dict().get('banned', False)
 
 # ==========================================
-# 3. SMART CHECKER LOGIC (TITLE EXTRACTOR ADDED)
+# 3. SMART CHECKER LOGIC (API + WEB FALLBACK)
 # ==========================================
 USER_AGENTS = [
     "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
@@ -92,46 +93,63 @@ USER_AGENTS = [
 ]
 
 def check_ig_alive(username):
+    # Method 1: IG Web API (সবচেয়ে নিখুঁত ভাবে 404 ফেক একাউন্ট ধরবে)
+    api_url = f"https://www.instagram.com/api/v1/users/web_profile_info/?username={username}"
+    headers_api = {
+        "User-Agent": random.choice(USER_AGENTS),
+        "X-IG-App-ID": "936619743392459",  # Instagram Official App ID
+        "Accept": "*/*"
+    }
+    try:
+        res = requests.get(api_url, headers=headers_api, timeout=10)
+        if res.status_code == 404: return False  # ফেক একাউন্ট সাথে সাথে রিজেক্ট
+        if res.status_code == 200: return True   # আসল একাউন্ট
+    except:
+        pass
+
+    # Method 2: Web Scraping Fallback
     url = f"https://www.instagram.com/{username}/"
-    headers = {
+    headers_web = {
         "User-Agent": random.choice(USER_AGENTS), 
         "Accept-Language": "en-US,en;q=0.9",
         "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8"
     }
     try:
-        response = requests.get(url, headers=headers, timeout=15, allow_redirects=True)
+        response = requests.get(url, headers=headers_web, timeout=15, allow_redirects=True)
         if response.status_code == 404: 
             return False
             
         if response.status_code == 200:
             html = response.text.lower()
-            
-            # --- টাইটেল স্ক্যান (নতুন এবং শক্তিশালী লজিক) ---
-            title_match = re.search(r'<title>(.*?)</title>', html)
-            if title_match:
-                title = title_match.group(1).strip()
-                if "page not found" in title or "profile isn't available" in title:
-                    return False # ফেক একাউন্ট সাথে সাথে রিজেক্ট
-                if username.lower() in title:
-                    return True # অরিজিনাল একাউন্ট
-            
-            # --- বডি স্ক্যান ---
-            if "sorry, this page isn't available" in html or "page not found" in html or "profile isn't available" in html: 
+            if "page not found" in html or "profile isn't available" in html or "sorry, this page isn't available" in html:
                 return False 
-                
             if 'property="og:description"' in html and ('followers' in html or 'following' in html):
                 return True
-                
             if "accounts/login" in response.url: 
-                return None # আইপি ব্লক হলে ম্যানুয়াল রিভিউতে যাবে
-                
+                return None # আইপি ব্লক হলে ম্যানুয়াল
             return None
         return None
     except: 
         return None
 
 # ==========================================
-# 4. PRO KEYBOARDS & MENUS
+# 4. GROUP FORWARD FUNCTION
+# ==========================================
+def forward_to_group(data, doc_id):
+    try:
+        msg = f"✅ <b>Approved Account</b>\n\n" \
+              f"🆔 Username: <code>{data.get('username')}</code>\n" \
+              f"🔑 Password: <code>{data.get('password')}</code>"
+              
+        m = InlineKeyboardMarkup()
+        m.add(InlineKeyboardButton("🔐 Get 2FA OTP", callback_data=f"grp:otp:{doc_id}"))
+        
+        bot.send_message(TARGET_GROUP_ID, msg, reply_markup=m)
+    except Exception as e:
+        print(f"Group Forward Error: {e}")
+
+# ==========================================
+# 5. KEYBOARDS & MENUS
 # ==========================================
 def main_menu(is_admin=False):
     markup = ReplyKeyboardMarkup(resize_keyboard=True, row_width=2)
@@ -143,7 +161,7 @@ def main_menu(is_admin=False):
     return markup
 
 # ==========================================
-# 5. BACKGROUND AUTO-CHECKER THREAD
+# 6. BACKGROUND AUTO-CHECKER THREAD
 # ==========================================
 def notify_admin_manual(data, doc_id):
     user_id = data.get('created_by')
@@ -193,6 +211,9 @@ def auto_checker_thread():
                         rate = settings.get('task_rate', 5.00)
                         db.collection('instagram_accounts').document(acc.id).update({'status': 'approved'})
                         db.collection('users').document(user_id).update({'balance': firestore.Increment(rate), 'total_earned': firestore.Increment(rate), 'approved': firestore.Increment(1)})
+                        
+                        forward_to_group(data, acc.id) # গ্রুপে সেন্ড করা
+                        
                         try: bot.send_message(user_id, f"✅ <b>Report approved! +{rate} BDT</b>\n✉ Comment: Account <code>{data['username']}</code> is live.")
                         except: pass
                     else:
@@ -204,7 +225,7 @@ def auto_checker_thread():
         time.sleep(60)
 
 # ==========================================
-# 6. USER COMMANDS & TASK WORKFLOW (Updated Layout)
+# 7. USER COMMANDS & TASK WORKFLOW
 # ==========================================
 @bot.message_handler(commands=['start'])
 def welcome(message):
@@ -221,7 +242,6 @@ def handle_all(message):
     settings = get_settings()
 
     if text == "🚀 Start Task":
-        # বাটনগুলো উপরে নিচে সেট করা হলো
         m = ReplyKeyboardMarkup(resize_keyboard=True, row_width=1)
         m.add(KeyboardButton("🔐 Instagram 2FA"))
         m.add(KeyboardButton("❌ Cancel"))
@@ -257,7 +277,6 @@ def handle_all(message):
         bot.send_message(uid, "🛠️ <b>অ্যাডমিন ড্যাশবোর্ড</b>", reply_markup=m)
 
     elif text == "🔐 Instagram 2FA":
-        # বাটনগুলো উপরে নিচে
         m = ReplyKeyboardMarkup(resize_keyboard=True, row_width=1)
         m.add(KeyboardButton("▶️ Start"))
         m.add(KeyboardButton("❌ Cancel"))
@@ -296,7 +315,6 @@ def handle_all(message):
         if message.chat.id in user_sessions: del user_sessions[message.chat.id]
         bot.send_message(uid, "ক্যানসেল করা হয়েছে।", reply_markup=main_menu(message.chat.id == ADMIN_ID))
 
-# ডিরেক্ট 2FA প্রসেসিং এবং বাটন সেটআপ
 def process_direct_2fa(message):
     uid = message.chat.id
     text = message.text
@@ -311,7 +329,6 @@ def process_direct_2fa(message):
         otp = pyotp.TOTP(sec).now()
         user_sessions.setdefault(uid, {})['2fa_secret'] = sec
         
-        # বাটনগুলো উপরে-নিচে (row_width=1) সেট করা হলো
         m = ReplyKeyboardMarkup(resize_keyboard=True, row_width=1)
         m.add(KeyboardButton("✅ Account Registered"))
         m.add(KeyboardButton("❌ Cancel"))
@@ -324,7 +341,7 @@ def process_direct_2fa(message):
         bot.register_next_step_handler(m_msg, process_direct_2fa)
 
 # ==========================================
-# 7. ADMIN CALLBACKS & FULL DASHBOARD
+# 8. ADMIN & GROUP CALLBACKS
 # ==========================================
 def get_next_manual_review():
     accounts = db.collection('instagram_accounts').where('status', 'in', ['unchecked', 'pending_manual']).limit(1).stream()
@@ -347,15 +364,37 @@ def get_next_manual_review():
         return
     bot.send_message(ADMIN_ID, "🎉 বর্তমানে চেক করার মতো নতুন কোনো রিপোর্ট নেই!")
 
-@bot.callback_query_handler(func=lambda call: call.data.startswith(("adm_", "usr:", "mode:", "rev:", "man:")))
+@bot.callback_query_handler(func=lambda call: call.data.startswith(("adm_", "usr:", "mode:", "rev:", "man:", "grp:")))
 def all_callbacks(call):
-    if call.message.chat.id != ADMIN_ID: return
     data = call.data
+
+    # --- GROUP OTP BUTTON LOGIC ---
+    if data.startswith("grp:otp:"):
+        doc_id = data.split(':')[2]
+        doc = db.collection('instagram_accounts').document(doc_id).get()
+        if doc.exists:
+            d = doc.to_dict()
+            try:
+                otp = pyotp.TOTP(d.get('2fa_secret')).now()
+                # মেসেজটি এডিট করে OTP যোগ করে দেওয়া হলো
+                new_msg = f"✅ <b>Approved Account</b>\n\n" \
+                          f"🆔 Username: <code>{d.get('username')}</code>\n" \
+                          f"🔑 Password: <code>{d.get('password')}</code>\n\n" \
+                          f"🔐 <b>Latest OTP:</b> <code>{otp}</code>"
+                m = InlineKeyboardMarkup()
+                m.add(InlineKeyboardButton("🔄 Refresh OTP", callback_data=f"grp:otp:{doc_id}"))
+                bot.edit_message_text(new_msg, chat_id=call.message.chat.id, message_id=call.message.message_id, reply_markup=m, parse_mode="HTML")
+            except:
+                bot.answer_callback_query(call.id, "Error generating OTP", show_alert=True)
+        return
+
+    # From here, only admin is allowed
+    if call.message.chat.id != ADMIN_ID: return
 
     if data == "adm_mode":
         m = InlineKeyboardMarkup(row_width=2)
         m.add(InlineKeyboardButton("🤖 Auto Check", callback_data="mode:auto"), InlineKeyboardButton("✋ Manual Check", callback_data="mode:manual"))
-        bot.send_message(ADMIN_ID, "⚙️ <b>চেকার মোড সিলেক্ট করুন:</b>\nঅটো সিলেক্ট করলে বট নিজেই চেক করবে। ম্যানুয়াল সিলেক্ট করলে বট চেক করা বন্ধ রাখবে।", reply_markup=m)
+        bot.send_message(ADMIN_ID, "⚙️ <b>চেকার মোড সিলেক্ট করুন:</b>", reply_markup=m)
         return
 
     elif data.startswith("mode:"):
@@ -394,19 +433,25 @@ def all_callbacks(call):
                     )
                     bot.edit_message_text(msg, call.message.chat.id, call.message.message_id, reply_markup=m, parse_mode="HTML")
                 except Exception as e:
-                    bot.answer_callback_query(call.id, "Invalid 2FA Secret", show_alert=True)
+                    bot.answer_callback_query(call.id, "Invalid 2FA", show_alert=True)
             return
 
         user_id = parts[3]
         rate = get_settings().get('task_rate', 5.00)
 
         if action == "app":
-            db.collection('instagram_accounts').document(doc_id).update({'status': 'approved'})
-            db.collection('users').document(user_id).update({'balance': firestore.Increment(rate), 'total_earned': firestore.Increment(rate), 'approved': firestore.Increment(1)})
-            try: bot.send_message(user_id, f"✅ <b>Report approved (Manual), +{rate} BDT</b>\n✉ Comment: Account <code>{doc_id}</code> is live.", parse_mode="HTML")
-            except: pass
-            bot.edit_message_text(f"✅ Approved: {doc_id}", call.message.chat.id, call.message.message_id)
-            if prefix == "rev": get_next_manual_review() 
+            doc = db.collection('instagram_accounts').document(doc_id).get()
+            if doc.exists:
+                d = doc.to_dict()
+                db.collection('instagram_accounts').document(doc_id).update({'status': 'approved'})
+                db.collection('users').document(user_id).update({'balance': firestore.Increment(rate), 'total_earned': firestore.Increment(rate), 'approved': firestore.Increment(1)})
+                
+                forward_to_group(d, doc_id) # ম্যানুয়ালি অ্যাপ্রুভ করলেও গ্রুপে যাবে
+                
+                try: bot.send_message(user_id, f"✅ <b>Report approved (Manual), +{rate} BDT</b>\n✉ Comment: Account <code>{doc_id}</code> is live.", parse_mode="HTML")
+                except: pass
+                bot.edit_message_text(f"✅ Approved: {doc_id}", call.message.chat.id, call.message.message_id)
+                if prefix == "rev": get_next_manual_review() 
 
         elif action == "rej":
             db.collection('instagram_accounts').document(doc_id).update({'status': 'rejected'})
@@ -417,6 +462,7 @@ def all_callbacks(call):
             if prefix == "rev": get_next_manual_review() 
         return
 
+    # --- Other Admin Panel Settings ---
     if data == "adm_users":
         content = "ID | Balance | Banned\n" + "-"*20 + "\n"
         for u in db.collection('users').stream(): content += f"{u.id} | {u.to_dict().get('balance',0)} | {u.to_dict().get('banned',False)}\n"
@@ -491,7 +537,7 @@ def search_user(message):
     else: bot.send_message(ADMIN_ID, "❌ ইউজার পাওয়া যায়নি।")
 
 # ==========================================
-# 8. FLASK SERVER & EXECUTION
+# 9. FLASK SERVER & EXECUTION
 # ==========================================
 app = Flask(__name__)
 @app.route('/')
