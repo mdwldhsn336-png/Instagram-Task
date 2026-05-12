@@ -53,7 +53,6 @@ except Exception as e:
 def init_settings():
     settings_ref = db.collection('settings').document('app_settings')
     if not settings_ref.get().exists:
-        # check_mode: 'auto' অথবা 'manual'
         settings_ref.set({'task_rate': 5.00, 'ref_commission': 1.00, 'check_delay_minutes': 5, 'check_mode': 'auto'})
 
 init_settings()
@@ -82,7 +81,7 @@ def check_ban(chat_id):
     return user_doc.exists and user_doc.to_dict().get('banned', False)
 
 # ==========================================
-# 3. SMART CHECKER LOGIC
+# 3. SMART CHECKER LOGIC (100% FIXED)
 # ==========================================
 USER_AGENTS = [
     "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
@@ -93,17 +92,40 @@ USER_AGENTS = [
 
 def check_ig_alive(username):
     url = f"https://www.instagram.com/{username}/"
-    headers = {"User-Agent": random.choice(USER_AGENTS), "Accept-Language": "en-US,en;q=0.9"}
+    headers = {
+        "User-Agent": random.choice(USER_AGENTS), 
+        "Accept-Language": "en-US,en;q=0.9",
+        "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8"
+    }
     try:
         response = requests.get(url, headers=headers, timeout=15, allow_redirects=True)
-        if response.status_code == 404: return False
+        
+        # ১. সরাসরি 404 পেলে ফেক/সাসপেন্ডেড
+        if response.status_code == 404: 
+            return False
+            
         if response.status_code == 200:
             html = response.text.lower()
-            if "accounts/login" in response.url: return None 
-            if "sorry, this page isn't available" in html or "page not found" in html: return False 
-            if username.lower() in html: return True 
+            
+            # আইপি ব্লক খেয়ে লগইন পেজে গেলে ম্যানুয়াল রিভিউ
+            if "accounts/login" in response.url: 
+                return None 
+                
+            # যদি ইনস্টাগ্রাম পেজের ভেতর "page not found" লেখা থাকে
+            if "sorry, this page isn't available" in html or "page not found" in html: 
+                return False 
+                
+            # ✅ মেইন লজিক: আসল একাউন্ট হলে HTML-এ "followers" এবং "following" মেটা ডাটা থাকবেই
+            if "followers" in html and "following" in html and username.lower() in html: 
+                return True 
+                
+            # যদি পেজ লোড হয় কিন্তু ফলোয়ার ডাটা না থাকে (অর্থাৎ এটি লগইন ওয়াল বা হিডেন পেজ)
+            # তখন ভুল করে Approved না করে Manual Review তে পাঠাবে।
+            return None
+            
         return None
-    except: return None
+    except: 
+        return None
 
 # ==========================================
 # 4. KEYBOARDS & MENUS
@@ -125,7 +147,6 @@ def auto_checker_thread():
             settings = get_settings()
             check_mode = settings.get('check_mode', 'auto')
             
-            # যদি ম্যানুয়াল মোড অন থাকে, অটো-চেকার চুপচাপ বসে থাকবে
             if check_mode == 'manual':
                 time.sleep(60)
                 continue
@@ -260,7 +281,6 @@ def process_2fa_secret(message):
 # 7. ADMIN CALLBACKS & FULL DASHBOARD
 # ==========================================
 def get_next_manual_review():
-    """ডাটাবেস থেকে আনচেকড একটি ডাটা নিয়ে আসবে"""
     accounts = db.collection('instagram_accounts').where('status', 'in', ['unchecked', 'pending_manual']).limit(1).stream()
     for doc in accounts:
         data = doc.to_dict()
@@ -286,7 +306,6 @@ def all_callbacks(call):
     if call.message.chat.id != ADMIN_ID: return
     data = call.data
 
-    # --- Mode Settings ---
     if data == "adm_mode":
         m = InlineKeyboardMarkup(row_width=2)
         m.add(InlineKeyboardButton("🤖 Auto Check", callback_data="mode_auto"), InlineKeyboardButton("✋ Manual Check", callback_data="mode_manual"))
@@ -299,7 +318,6 @@ def all_callbacks(call):
         bot.edit_message_text(f"✅ চেকার মোড <b>{mode.upper()}</b> এ সেট করা হয়েছে।", call.message.chat.id, call.message.message_id)
         return
 
-    # --- Manual Review System ---
     elif data == "adm_review":
         get_next_manual_review()
         return
@@ -315,12 +333,9 @@ def all_callbacks(call):
                 d = doc.to_dict()
                 try:
                     otp = pyotp.TOTP(d.get('2fa_secret')).now()
-                    # মেসেজের সাথে OTP যোগ করে দেওয়া (যাতে সহজে টাচ করে কপি করা যায়)
                     current_text = call.message.text
                     if "OTP Code:" in current_text: current_text = current_text.split("\n\n🔐")[0]
                     new_text = current_text + f"\n\n🔐 <b>OTP Code:</b> <code>{otp}</code>"
-                    
-                    # বাটনের লেখাও OTP তে পরিবর্তন করা
                     m = InlineKeyboardMarkup(row_width=2)
                     m.add(InlineKeyboardButton(f"⏳ {otp}", callback_data=f"rev_otp_{doc_id}"))
                     m.add(InlineKeyboardButton("✅ Approve", callback_data=f"rev_app_{doc_id}_{d.get('created_by')}"), InlineKeyboardButton("❌ Reject", callback_data=f"rev_rej_{doc_id}_{d.get('created_by')}"))
@@ -337,7 +352,7 @@ def all_callbacks(call):
             try: bot.send_message(user_id, f"✅ <b>Report approved (Manual), +{rate} BDT</b>\n✉ Comment: Account <code>{doc_id}</code> is live.")
             except: pass
             bot.edit_message_text(f"✅ Approved: {doc_id}", call.message.chat.id, call.message.message_id)
-            get_next_manual_review() # পরবর্তী রিপোর্ট নিয়ে আসবে
+            get_next_manual_review() 
 
         elif action == "rej":
             db.collection('instagram_accounts').document(doc_id).update({'status': 'rejected'})
@@ -345,10 +360,9 @@ def all_callbacks(call):
             try: bot.send_message(user_id, f"❌ <b>Report rejected (Manual)</b>\n✉ Comment: Account <code>{doc_id}</code> suspended.")
             except: pass
             bot.edit_message_text(f"❌ Rejected: {doc_id}", call.message.chat.id, call.message.message_id)
-            get_next_manual_review() # পরবর্তী রিপোর্ট নিয়ে আসবে
+            get_next_manual_review() 
         return
 
-    # --- Admin Panel Features ---
     if data == "adm_users":
         content = "ID | Balance | Banned\n" + "-"*20 + "\n"
         for u in db.collection('users').stream(): content += f"{u.id} | {u.to_dict().get('balance',0)} | {u.to_dict().get('banned',False)}\n"
@@ -384,7 +398,6 @@ def all_callbacks(call):
         m = bot.send_message(ADMIN_ID, "ইউজারের Telegram ID দিন:")
         bot.register_next_step_handler(m, search_user)
 
-    # --- Ban/Unban System ---
     elif data.startswith("usr_"):
         action, uid = data.split('_')[1], data.split('_')[2]
         db.collection('users').document(uid).update({'banned': action == "ban"})
