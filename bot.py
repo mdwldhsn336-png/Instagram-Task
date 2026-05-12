@@ -83,39 +83,40 @@ def check_ban(chat_id):
     return user_doc.exists and user_doc.to_dict().get('banned', False)
 
 # ==========================================
-# 3. SMART CHECKER LOGIC (API + WEB FALLBACK)
+# 3. SMART CHECKER LOGIC (HIDDEN JSON API ADDED)
 # ==========================================
 USER_AGENTS = [
     "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
     "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.2 Safari/605.1.15",
-    "Mozilla/5.0 (iPhone; CPU iPhone OS 17_2 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.2 Mobile/15E148 Safari/604.1",
     "Mozilla/5.0 (Linux; Android 13; SM-S918B) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Mobile Safari/537.36"
 ]
 
 def check_ig_alive(username):
-    # Method 1: IG Web API (সবচেয়ে নিখুঁত ভাবে 404 ফেক একাউন্ট ধরবে)
-    api_url = f"https://www.instagram.com/api/v1/users/web_profile_info/?username={username}"
-    headers_api = {
+    headers = {
         "User-Agent": random.choice(USER_AGENTS),
-        "X-IG-App-ID": "936619743392459",  # Instagram Official App ID
-        "Accept": "*/*"
+        "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,*/*;q=0.8",
+        "Accept-Language": "en-US,en;q=0.9"
     }
+
+    # Method 1: Hidden JSON Data Check (Bypasses basic IP blocks)
     try:
-        res = requests.get(api_url, headers=headers_api, timeout=10)
-        if res.status_code == 404: return False  # ফেক একাউন্ট সাথে সাথে রিজেক্ট
-        if res.status_code == 200: return True   # আসল একাউন্ট
+        json_url = f"https://www.instagram.com/{username}/?__a=1&__d=dis"
+        res = requests.get(json_url, headers=headers, timeout=10, allow_redirects=False)
+        
+        if res.status_code == 404: 
+            return False # ফেক বা ব্যানড আইডি
+        
+        if res.status_code == 200:
+            if "graphql" in res.text or "logging_page_id" in res.text:
+                return True # অরিজিনাল আইডি
     except:
         pass
 
-    # Method 2: Web Scraping Fallback
-    url = f"https://www.instagram.com/{username}/"
-    headers_web = {
-        "User-Agent": random.choice(USER_AGENTS), 
-        "Accept-Language": "en-US,en;q=0.9",
-        "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8"
-    }
+    # Method 2: Fallback HTML Parsing
     try:
-        response = requests.get(url, headers=headers_web, timeout=15, allow_redirects=True)
+        url = f"https://www.instagram.com/{username}/"
+        response = requests.get(url, headers=headers, timeout=15, allow_redirects=True)
+        
         if response.status_code == 404: 
             return False
             
@@ -123,14 +124,18 @@ def check_ig_alive(username):
             html = response.text.lower()
             if "page not found" in html or "profile isn't available" in html or "sorry, this page isn't available" in html:
                 return False 
+                
             if 'property="og:description"' in html and ('followers' in html or 'following' in html):
                 return True
+                
+            # যদি সার্ভার থেকে লগইন পেজে লাথি মেরে পাঠিয়ে দেয়
             if "accounts/login" in response.url: 
-                return None # আইপি ব্লক হলে ম্যানুয়াল
+                return None 
+                
             return None
-        return None
     except: 
         return None
+    return None
 
 # ==========================================
 # 4. GROUP FORWARD FUNCTION
@@ -376,7 +381,6 @@ def all_callbacks(call):
             d = doc.to_dict()
             try:
                 otp = pyotp.TOTP(d.get('2fa_secret')).now()
-                # মেসেজটি এডিট করে OTP যোগ করে দেওয়া হলো
                 new_msg = f"✅ <b>Approved Account</b>\n\n" \
                           f"🆔 Username: <code>{d.get('username')}</code>\n" \
                           f"🔑 Password: <code>{d.get('password')}</code>\n\n" \
@@ -388,7 +392,6 @@ def all_callbacks(call):
                 bot.answer_callback_query(call.id, "Error generating OTP", show_alert=True)
         return
 
-    # From here, only admin is allowed
     if call.message.chat.id != ADMIN_ID: return
 
     if data == "adm_mode":
@@ -462,7 +465,6 @@ def all_callbacks(call):
             if prefix == "rev": get_next_manual_review() 
         return
 
-    # --- Other Admin Panel Settings ---
     if data == "adm_users":
         content = "ID | Balance | Banned\n" + "-"*20 + "\n"
         for u in db.collection('users').stream(): content += f"{u.id} | {u.to_dict().get('balance',0)} | {u.to_dict().get('banned',False)}\n"
