@@ -81,7 +81,7 @@ def check_ban(chat_id):
     return user_doc.exists and user_doc.to_dict().get('banned', False)
 
 # ==========================================
-# 3. SMART CHECKER LOGIC
+# 3. SMART CHECKER LOGIC (IMAGE SUPPORTED)
 # ==========================================
 USER_AGENTS = [
     "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
@@ -101,25 +101,38 @@ def check_ig_alive(username):
         response = requests.get(url, headers=headers, timeout=15, allow_redirects=True)
         if response.status_code == 404: 
             return False
+            
         if response.status_code == 200:
             html = response.text.lower()
-            if "accounts/login" in response.url: return None 
-            if "sorry, this page isn't available" in html or "page not found" in html: return False 
-            if "followers" in html and "following" in html and username.lower() in html: return True 
+            
+            # ফেক/ব্যানড একাউন্ট নিশ্চিত করা
+            if "sorry, this page isn't available" in html or "page not found" in html: 
+                return False 
+                
+            # আসল একাউন্ট চেনার উপায় (লগইন পপ-আপ থাকলেও ব্যাকগ্রাউন্ডের মেটা ডাটা চেক করবে)
+            if 'property="og:description"' in html and ('followers' in html or 'following' in html):
+                return True
+                
+            # যদি সম্পূর্ণ রিডাইরেক্ট করে লগইন পেজে নিয়ে যায় (আইপি ব্লক)
+            if "accounts/login" in response.url: 
+                return None 
+                
             return None
         return None
     except: 
         return None
 
 # ==========================================
-# 4. KEYBOARDS & MENUS
+# 4. PRO KEYBOARDS & MENUS
 # ==========================================
 def main_menu(is_admin=False):
     markup = ReplyKeyboardMarkup(resize_keyboard=True, row_width=2)
-    markup.add(KeyboardButton("🚀 Start Task"), KeyboardButton("👤 Profile"))
-    markup.add(KeyboardButton("🏆 Top 10"), KeyboardButton("👥 Referral"))
-    markup.add(KeyboardButton("🌐 Language"))
-    if is_admin: markup.add(KeyboardButton("⚙️ Admin Panel"))
+    # বাটনগুলো প্রফেশনালভাবে সাজানো হলো
+    markup.add(KeyboardButton("🚀 Start Task"))
+    markup.add(KeyboardButton("👤 Profile"), KeyboardButton("👥 Referral"))
+    markup.add(KeyboardButton("🏆 Top 10"), KeyboardButton("🌐 Language"))
+    if is_admin: 
+        markup.add(KeyboardButton("⚙️ Admin Panel"))
     return markup
 
 # ==========================================
@@ -184,7 +197,7 @@ def auto_checker_thread():
         time.sleep(60)
 
 # ==========================================
-# 6. USER COMMANDS & WORKFLOW
+# 6. USER COMMANDS & TASK WORKFLOW
 # ==========================================
 @bot.message_handler(commands=['start'])
 def welcome(message):
@@ -241,11 +254,12 @@ def handle_all(message):
         un = f"{first.lower()}_{last.lower()}{random.randint(1000,99999)}"[:18]
         pw = ''.join(random.choices(string.ascii_letters + string.digits + "@#$", k=12))
         user_sessions[message.chat.id] = {'name': f"{first} {last}", 'username': un, 'password': pw}
-        bot.send_message(uid, f"✅ <b>আপনার ডিটেইলস</b>:\n\n👤 Name: <code>{first} {last}</code>\n🆔 Username: <code>{un}</code>\n🔑 Password: <code>{pw}</code>", reply_markup=ReplyKeyboardMarkup(resize_keyboard=True).add("🔑 2FA Input", "❌ Cancel"))
-
-    elif text == "🔑 2FA Input":
-        m = bot.send_message(uid, "ইনস্টাগ্রামের <b>2FA Secret Code</b> দিন:", reply_markup=telebot.types.ReplyKeyboardRemove())
-        bot.register_next_step_handler(m, process_2fa_secret)
+        
+        # নতুন প্রফেশনাল ফ্লো: ডিটেইলস এর সাথেই কোড চাইবে
+        msg_text = f"✅ <b>আপনার ডিটেইলস</b>:\n\n👤 Name: <code>{first} {last}</code>\n🆔 Username: <code>{un}</code>\n🔑 Password: <code>{pw}</code>\n\n👇 <b>একাউন্ট খোলার পর নিচে 2FA সিক্রেট কোডটি দিন:</b>"
+        
+        m = bot.send_message(uid, msg_text, reply_markup=ReplyKeyboardMarkup(resize_keyboard=True).add("❌ Cancel"))
+        bot.register_next_step_handler(m, process_direct_2fa)
 
     elif text == "✅ Account Registered":
         data = user_sessions.get(message.chat.id)
@@ -267,16 +281,24 @@ def handle_all(message):
         if message.chat.id in user_sessions: del user_sessions[message.chat.id]
         bot.send_message(uid, "ক্যানসেল করা হয়েছে।", reply_markup=main_menu(message.chat.id == ADMIN_ID))
 
-def process_2fa_secret(message):
+# ডিরেক্ট 2FA প্রসেসিং ফাংশন
+def process_direct_2fa(message):
     uid = message.chat.id
-    sec = message.text.replace(" ", "")
+    text = message.text
+    
+    if text == "❌ Cancel":
+        if uid in user_sessions: del user_sessions[uid]
+        bot.send_message(uid, "ক্যানসেল করা হয়েছে।", reply_markup=main_menu(uid == ADMIN_ID))
+        return
+
+    sec = text.replace(" ", "")
     try:
         otp = pyotp.TOTP(sec).now()
         user_sessions.setdefault(uid, {})['2fa_secret'] = sec
-        bot.send_message(uid, f"✅ <b>OTP জেনারেট হয়েছে</b>:\n\n<code>{otp}</code>", reply_markup=ReplyKeyboardMarkup(resize_keyboard=True).add("✅ Account Registered", "❌ Cancel"))
+        bot.send_message(uid, f"✅ <b>OTP জেনারেট হয়েছে:</b>\n\n<code>{otp}</code>", reply_markup=ReplyKeyboardMarkup(resize_keyboard=True).add("✅ Account Registered", "❌ Cancel"))
     except:
-        m = bot.send_message(uid, "❌ Secret Code ভুল। আবার দিন:")
-        bot.register_next_step_handler(m, process_2fa_secret)
+        m = bot.send_message(uid, "❌ Secret Code ভুল। আবার দিন:", reply_markup=ReplyKeyboardMarkup(resize_keyboard=True).add("❌ Cancel"))
+        bot.register_next_step_handler(m, process_direct_2fa)
 
 # ==========================================
 # 7. ADMIN CALLBACKS & FULL DASHBOARD
@@ -307,7 +329,6 @@ def all_callbacks(call):
     if call.message.chat.id != ADMIN_ID: return
     data = call.data
 
-    # --- Mode Settings ---
     if data == "adm_mode":
         m = InlineKeyboardMarkup(row_width=2)
         m.add(InlineKeyboardButton("🤖 Auto Check", callback_data="mode:auto"), InlineKeyboardButton("✋ Manual Check", callback_data="mode:manual"))
@@ -320,7 +341,6 @@ def all_callbacks(call):
         bot.edit_message_text(f"✅ চেকার মোড <b>{mode.upper()}</b> এ সেট করা হয়েছে।", call.message.chat.id, call.message.message_id)
         return
 
-    # --- Manual Review Features ---
     elif data == "adm_review":
         get_next_manual_review()
         return
@@ -337,22 +357,10 @@ def all_callbacks(call):
                 d = doc.to_dict()
                 try:
                     otp = pyotp.TOTP(d.get('2fa_secret')).now()
-                    
-                    # HTML ফরম্যাট ঠিক রাখার জন্য মেসেজ নতুন করে বিল্ড করা
                     if prefix == "rev":
-                        msg = f"📝 <b>ম্যানুয়াল রিভিউ</b>\n\n" \
-                              f"🧾 Report ID: <code>{doc.id}</code>\n" \
-                              f"👤 User ID: <code>{d.get('created_by')}</code>\n" \
-                              f"🆔 Username: <code>{d.get('username')}</code>\n" \
-                              f"🔑 Password: <code>{d.get('password')}</code>\n\n" \
-                              f"🔐 <b>OTP Code:</b> <code>{otp}</code>"
+                        msg = f"📝 <b>ম্যানুয়াল রিভিউ</b>\n\n🧾 Report ID: <code>{doc.id}</code>\n👤 User ID: <code>{d.get('created_by')}</code>\n🆔 Username: <code>{d.get('username')}</code>\n🔑 Password: <code>{d.get('password')}</code>\n\n🔐 <b>OTP Code:</b> <code>{otp}</code>"
                     else:
-                        msg = f"⚠️ <b>ম্যানুয়াল রিভিউ প্রয়োজন!</b>\n\n" \
-                              f"👤 User ID: <code>{d.get('created_by')}</code>\n" \
-                              f"🆔 Username: <code>{d.get('username')}</code>\n" \
-                              f"🔑 Pass: <code>{d.get('password')}</code>\n" \
-                              f"🔐 2FA: <code>{d.get('2fa_secret')}</code>\n\n" \
-                              f"🔐 <b>OTP Code:</b> <code>{otp}</code>"
+                        msg = f"⚠️ <b>ম্যানুয়াল রিভিউ প্রয়োজন!</b>\n\n👤 User ID: <code>{d.get('created_by')}</code>\n🆔 Username: <code>{d.get('username')}</code>\n🔑 Pass: <code>{d.get('password')}</code>\n🔐 2FA: <code>{d.get('2fa_secret')}</code>\n\n🔐 <b>OTP Code:</b> <code>{otp}</code>"
                               
                     m = InlineKeyboardMarkup(row_width=2)
                     m.add(InlineKeyboardButton(f"⏳ {otp}", callback_data=f"{prefix}:otp:{doc_id}"))
@@ -386,7 +394,6 @@ def all_callbacks(call):
             if prefix == "rev": get_next_manual_review() 
         return
 
-    # --- Other Admin Panel Settings ---
     if data == "adm_users":
         content = "ID | Balance | Banned\n" + "-"*20 + "\n"
         for u in db.collection('users').stream(): content += f"{u.id} | {u.to_dict().get('balance',0)} | {u.to_dict().get('banned',False)}\n"
