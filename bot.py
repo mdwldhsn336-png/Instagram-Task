@@ -81,7 +81,7 @@ def check_ban(chat_id):
     return user_doc.exists and user_doc.to_dict().get('banned', False)
 
 # ==========================================
-# 3. SMART CHECKER LOGIC (100% FIXED)
+# 3. SMART CHECKER LOGIC
 # ==========================================
 USER_AGENTS = [
     "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
@@ -99,30 +99,14 @@ def check_ig_alive(username):
     }
     try:
         response = requests.get(url, headers=headers, timeout=15, allow_redirects=True)
-        
-        # ১. সরাসরি 404 পেলে ফেক/সাসপেন্ডেড
         if response.status_code == 404: 
             return False
-            
         if response.status_code == 200:
             html = response.text.lower()
-            
-            # আইপি ব্লক খেয়ে লগইন পেজে গেলে ম্যানুয়াল রিভিউ
-            if "accounts/login" in response.url: 
-                return None 
-                
-            # যদি ইনস্টাগ্রাম পেজের ভেতর "page not found" লেখা থাকে
-            if "sorry, this page isn't available" in html or "page not found" in html: 
-                return False 
-                
-            # ✅ মেইন লজিক: আসল একাউন্ট হলে HTML-এ "followers" এবং "following" মেটা ডাটা থাকবেই
-            if "followers" in html and "following" in html and username.lower() in html: 
-                return True 
-                
-            # যদি পেজ লোড হয় কিন্তু ফলোয়ার ডাটা না থাকে (অর্থাৎ এটি লগইন ওয়াল বা হিডেন পেজ)
-            # তখন ভুল করে Approved না করে Manual Review তে পাঠাবে।
+            if "accounts/login" in response.url: return None 
+            if "sorry, this page isn't available" in html or "page not found" in html: return False 
+            if "followers" in html and "following" in html and username.lower() in html: return True 
             return None
-            
         return None
     except: 
         return None
@@ -141,6 +125,22 @@ def main_menu(is_admin=False):
 # ==========================================
 # 5. BACKGROUND AUTO-CHECKER THREAD
 # ==========================================
+def notify_admin_manual(data, doc_id):
+    user_id = data.get('created_by')
+    msg = f"⚠️ <b>ম্যানুয়াল রিভিউ প্রয়োজন!</b>\n\n" \
+          f"👤 User ID: <code>{user_id}</code>\n" \
+          f"🆔 Username: <code>{data.get('username')}</code>\n" \
+          f"🔑 Pass: <code>{data.get('password')}</code>\n" \
+          f"🔐 2FA: <code>{data.get('2fa_secret')}</code>"
+    m = InlineKeyboardMarkup(row_width=2)
+    m.add(InlineKeyboardButton("🔑 Get OTP", callback_data=f"man:otp:{doc_id}"))
+    m.add(
+        InlineKeyboardButton("✅ Approve", callback_data=f"man:app:{doc_id}:{user_id}"),
+        InlineKeyboardButton("❌ Reject", callback_data=f"man:rej:{doc_id}:{user_id}")
+    )
+    try: bot.send_message(ADMIN_ID, msg, reply_markup=m)
+    except: pass
+
 def auto_checker_thread():
     while True:
         try:
@@ -166,6 +166,7 @@ def auto_checker_thread():
                     
                     if status is None:
                         db.collection('instagram_accounts').document(acc.id).update({'status': 'pending_manual'})
+                        notify_admin_manual(data, acc.id)
                         try: bot.send_message(user_id, f"⏳ <code>{data['username']}</code> অটো-চেক সম্ভব হয়নি, ম্যানুয়াল রিভিউতে আছে।")
                         except: pass
                     elif status:
@@ -291,39 +292,42 @@ def get_next_manual_review():
               f"🔑 Password: <code>{data.get('password')}</code>"
         
         m = InlineKeyboardMarkup(row_width=2)
-        m.add(InlineKeyboardButton("🔑 Get OTP", callback_data=f"rev_otp_{doc.id}"))
+        m.add(InlineKeyboardButton("🔑 Get OTP", callback_data=f"rev:otp:{doc.id}"))
         m.add(
-            InlineKeyboardButton("✅ Approve", callback_data=f"rev_app_{doc.id}_{data.get('created_by')}"),
-            InlineKeyboardButton("❌ Reject", callback_data=f"rev_rej_{doc.id}_{data.get('created_by')}")
+            InlineKeyboardButton("✅ Approve", callback_data=f"rev:app:{doc.id}:{data.get('created_by')}"),
+            InlineKeyboardButton("❌ Reject", callback_data=f"rev:rej:{doc.id}:{data.get('created_by')}")
         )
         try: bot.send_message(ADMIN_ID, msg, reply_markup=m)
         except: pass
         return
     bot.send_message(ADMIN_ID, "🎉 বর্তমানে চেক করার মতো নতুন কোনো রিপোর্ট নেই!")
 
-@bot.callback_query_handler(func=lambda call: call.data.startswith("adm_") or call.data.startswith("usr_") or call.data.startswith("mode_") or call.data.startswith("rev_"))
+@bot.callback_query_handler(func=lambda call: call.data.startswith(("adm_", "usr:", "mode:", "rev:", "man:")))
 def all_callbacks(call):
     if call.message.chat.id != ADMIN_ID: return
     data = call.data
 
+    # --- Mode Settings ---
     if data == "adm_mode":
         m = InlineKeyboardMarkup(row_width=2)
-        m.add(InlineKeyboardButton("🤖 Auto Check", callback_data="mode_auto"), InlineKeyboardButton("✋ Manual Check", callback_data="mode_manual"))
+        m.add(InlineKeyboardButton("🤖 Auto Check", callback_data="mode:auto"), InlineKeyboardButton("✋ Manual Check", callback_data="mode:manual"))
         bot.send_message(ADMIN_ID, "⚙️ <b>চেকার মোড সিলেক্ট করুন:</b>\nঅটো সিলেক্ট করলে বট নিজেই চেক করবে। ম্যানুয়াল সিলেক্ট করলে বট চেক করা বন্ধ রাখবে।", reply_markup=m)
         return
 
-    elif data.startswith("mode_"):
-        mode = data.split('_')[1]
+    elif data.startswith("mode:"):
+        mode = data.split(':')[1]
         db.collection('settings').document('app_settings').update({'check_mode': mode})
         bot.edit_message_text(f"✅ চেকার মোড <b>{mode.upper()}</b> এ সেট করা হয়েছে।", call.message.chat.id, call.message.message_id)
         return
 
+    # --- Manual Review Features ---
     elif data == "adm_review":
         get_next_manual_review()
         return
 
-    elif data.startswith("rev_"):
-        parts = data.split('_')
+    elif data.startswith("rev:") or data.startswith("man:"):
+        parts = data.split(':')
+        prefix = parts[0]
         action = parts[1]
         doc_id = parts[2]
         
@@ -333,14 +337,33 @@ def all_callbacks(call):
                 d = doc.to_dict()
                 try:
                     otp = pyotp.TOTP(d.get('2fa_secret')).now()
-                    current_text = call.message.text
-                    if "OTP Code:" in current_text: current_text = current_text.split("\n\n🔐")[0]
-                    new_text = current_text + f"\n\n🔐 <b>OTP Code:</b> <code>{otp}</code>"
+                    
+                    # HTML ফরম্যাট ঠিক রাখার জন্য মেসেজ নতুন করে বিল্ড করা
+                    if prefix == "rev":
+                        msg = f"📝 <b>ম্যানুয়াল রিভিউ</b>\n\n" \
+                              f"🧾 Report ID: <code>{doc.id}</code>\n" \
+                              f"👤 User ID: <code>{d.get('created_by')}</code>\n" \
+                              f"🆔 Username: <code>{d.get('username')}</code>\n" \
+                              f"🔑 Password: <code>{d.get('password')}</code>\n\n" \
+                              f"🔐 <b>OTP Code:</b> <code>{otp}</code>"
+                    else:
+                        msg = f"⚠️ <b>ম্যানুয়াল রিভিউ প্রয়োজন!</b>\n\n" \
+                              f"👤 User ID: <code>{d.get('created_by')}</code>\n" \
+                              f"🆔 Username: <code>{d.get('username')}</code>\n" \
+                              f"🔑 Pass: <code>{d.get('password')}</code>\n" \
+                              f"🔐 2FA: <code>{d.get('2fa_secret')}</code>\n\n" \
+                              f"🔐 <b>OTP Code:</b> <code>{otp}</code>"
+                              
                     m = InlineKeyboardMarkup(row_width=2)
-                    m.add(InlineKeyboardButton(f"⏳ {otp}", callback_data=f"rev_otp_{doc_id}"))
-                    m.add(InlineKeyboardButton("✅ Approve", callback_data=f"rev_app_{doc_id}_{d.get('created_by')}"), InlineKeyboardButton("❌ Reject", callback_data=f"rev_rej_{doc_id}_{d.get('created_by')}"))
-                    bot.edit_message_text(new_text, call.message.chat.id, call.message.message_id, reply_markup=m)
-                except: bot.answer_callback_query(call.id, "Invalid 2FA Secret", show_alert=True)
+                    m.add(InlineKeyboardButton(f"⏳ {otp}", callback_data=f"{prefix}:otp:{doc_id}"))
+                    user_id = d.get('created_by')
+                    m.add(
+                        InlineKeyboardButton("✅ Approve", callback_data=f"{prefix}:app:{doc_id}:{user_id}"),
+                        InlineKeyboardButton("❌ Reject", callback_data=f"{prefix}:rej:{doc_id}:{user_id}")
+                    )
+                    bot.edit_message_text(msg, call.message.chat.id, call.message.message_id, reply_markup=m, parse_mode="HTML")
+                except Exception as e:
+                    bot.answer_callback_query(call.id, "Invalid 2FA Secret", show_alert=True)
             return
 
         user_id = parts[3]
@@ -349,20 +372,21 @@ def all_callbacks(call):
         if action == "app":
             db.collection('instagram_accounts').document(doc_id).update({'status': 'approved'})
             db.collection('users').document(user_id).update({'balance': firestore.Increment(rate), 'total_earned': firestore.Increment(rate), 'approved': firestore.Increment(1)})
-            try: bot.send_message(user_id, f"✅ <b>Report approved (Manual), +{rate} BDT</b>\n✉ Comment: Account <code>{doc_id}</code> is live.")
+            try: bot.send_message(user_id, f"✅ <b>Report approved (Manual), +{rate} BDT</b>\n✉ Comment: Account <code>{doc_id}</code> is live.", parse_mode="HTML")
             except: pass
             bot.edit_message_text(f"✅ Approved: {doc_id}", call.message.chat.id, call.message.message_id)
-            get_next_manual_review() 
+            if prefix == "rev": get_next_manual_review() 
 
         elif action == "rej":
             db.collection('instagram_accounts').document(doc_id).update({'status': 'rejected'})
             db.collection('users').document(user_id).update({'rejected': firestore.Increment(1)})
-            try: bot.send_message(user_id, f"❌ <b>Report rejected (Manual)</b>\n✉ Comment: Account <code>{doc_id}</code> suspended.")
+            try: bot.send_message(user_id, f"❌ <b>Report rejected (Manual)</b>\n✉ Comment: Account <code>{doc_id}</code> suspended.", parse_mode="HTML")
             except: pass
             bot.edit_message_text(f"❌ Rejected: {doc_id}", call.message.chat.id, call.message.message_id)
-            get_next_manual_review() 
+            if prefix == "rev": get_next_manual_review() 
         return
 
+    # --- Other Admin Panel Settings ---
     if data == "adm_users":
         content = "ID | Balance | Banned\n" + "-"*20 + "\n"
         for u in db.collection('users').stream(): content += f"{u.id} | {u.to_dict().get('balance',0)} | {u.to_dict().get('banned',False)}\n"
@@ -398,8 +422,10 @@ def all_callbacks(call):
         m = bot.send_message(ADMIN_ID, "ইউজারের Telegram ID দিন:")
         bot.register_next_step_handler(m, search_user)
 
-    elif data.startswith("usr_"):
-        action, uid = data.split('_')[1], data.split('_')[2]
+    elif data.startswith("usr:"):
+        parts = data.split(':')
+        action = parts[1]
+        uid = parts[2]
         db.collection('users').document(uid).update({'banned': action == "ban"})
         bot.edit_message_text(f"✅ User {uid} is {action}ned.", call.message.chat.id, call.message.message_id)
 
@@ -430,7 +456,7 @@ def search_user(message):
         d = doc.to_dict()
         markup = InlineKeyboardMarkup()
         action = "unban" if d.get('banned') else "ban"
-        markup.add(InlineKeyboardButton(f"🚫 {action.title()} User", callback_data=f"usr_{action}_{uid}"))
+        markup.add(InlineKeyboardButton(f"🚫 {action.title()} User", callback_data=f"usr:{action}:{uid}"))
         bot.send_message(ADMIN_ID, f"👤 <b>Info ({uid})</b>\n\nBalance: {d.get('balance')}\nTasks: {d.get('submitted')}\nBanned: {d.get('banned')}", reply_markup=markup)
     else: bot.send_message(ADMIN_ID, "❌ ইউজার পাওয়া যায়নি।")
 
