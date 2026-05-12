@@ -6,6 +6,7 @@ import string
 import io
 import threading
 import requests
+import re
 from datetime import datetime, timezone
 from flask import Flask
 
@@ -81,7 +82,7 @@ def check_ban(chat_id):
     return user_doc.exists and user_doc.to_dict().get('banned', False)
 
 # ==========================================
-# 3. SMART CHECKER LOGIC (IMAGE & ERROR SUPPORTED)
+# 3. SMART CHECKER LOGIC (TITLE EXTRACTOR ADDED)
 # ==========================================
 USER_AGENTS = [
     "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
@@ -105,17 +106,24 @@ def check_ig_alive(username):
         if response.status_code == 200:
             html = response.text.lower()
             
-            # ফেক/ব্যানড একাউন্ট নিশ্চিত করা (ছবি অনুযায়ী লজিক আপডেট)
+            # --- টাইটেল স্ক্যান (নতুন এবং শক্তিশালী লজিক) ---
+            title_match = re.search(r'<title>(.*?)</title>', html)
+            if title_match:
+                title = title_match.group(1).strip()
+                if "page not found" in title or "profile isn't available" in title:
+                    return False # ফেক একাউন্ট সাথে সাথে রিজেক্ট
+                if username.lower() in title:
+                    return True # অরিজিনাল একাউন্ট
+            
+            # --- বডি স্ক্যান ---
             if "sorry, this page isn't available" in html or "page not found" in html or "profile isn't available" in html: 
                 return False 
                 
-            # আসল একাউন্ট চেনার উপায়
             if 'property="og:description"' in html and ('followers' in html or 'following' in html):
                 return True
                 
-            # যদি সম্পূর্ণ রিডাইরেক্ট করে লগইন পেজে নিয়ে যায় (আইপি ব্লক)
             if "accounts/login" in response.url: 
-                return None 
+                return None # আইপি ব্লক হলে ম্যানুয়াল রিভিউতে যাবে
                 
             return None
         return None
@@ -196,7 +204,7 @@ def auto_checker_thread():
         time.sleep(60)
 
 # ==========================================
-# 6. USER COMMANDS & TASK WORKFLOW
+# 6. USER COMMANDS & TASK WORKFLOW (Updated Layout)
 # ==========================================
 @bot.message_handler(commands=['start'])
 def welcome(message):
@@ -213,7 +221,10 @@ def handle_all(message):
     settings = get_settings()
 
     if text == "🚀 Start Task":
-        m = ReplyKeyboardMarkup(resize_keyboard=True).add("🔐 Instagram 2FA", "❌ Cancel")
+        # বাটনগুলো উপরে নিচে সেট করা হলো
+        m = ReplyKeyboardMarkup(resize_keyboard=True, row_width=1)
+        m.add(KeyboardButton("🔐 Instagram 2FA"))
+        m.add(KeyboardButton("❌ Cancel"))
         bot.send_message(uid, "পরবর্তী ধাপে যেতে ক্লিক করুন:", reply_markup=m)
     
     elif text == "👤 Profile":
@@ -246,7 +257,11 @@ def handle_all(message):
         bot.send_message(uid, "🛠️ <b>অ্যাডমিন ড্যাশবোর্ড</b>", reply_markup=m)
 
     elif text == "🔐 Instagram 2FA":
-        bot.send_message(uid, "📌 <b>রুলস:</b> ডিটেইলস কপি করে একাউন্ট খুলুন এবং 2FA সেট করুন।", reply_markup=ReplyKeyboardMarkup(resize_keyboard=True).add("▶️ Start", "❌ Cancel"))
+        # বাটনগুলো উপরে নিচে
+        m = ReplyKeyboardMarkup(resize_keyboard=True, row_width=1)
+        m.add(KeyboardButton("▶️ Start"))
+        m.add(KeyboardButton("❌ Cancel"))
+        bot.send_message(uid, "📌 <b>রুলস:</b> ডিটেইলস কপি করে একাউন্ট খুলুন এবং 2FA সেট করুন।", reply_markup=m)
 
     elif text == "▶️ Start":
         first, last = fake.first_name(), fake.last_name()
@@ -256,8 +271,10 @@ def handle_all(message):
         
         msg_text = f"✅ <b>আপনার ডিটেইলস</b>:\n\n👤 Name: <code>{first} {last}</code>\n🆔 Username: <code>{un}</code>\n🔑 Password: <code>{pw}</code>\n\n👇 <b>একাউন্ট খোলার পর নিচে 2FA সিক্রেট কোডটি দিন:</b>"
         
-        m = bot.send_message(uid, msg_text, reply_markup=ReplyKeyboardMarkup(resize_keyboard=True).add("❌ Cancel"))
-        bot.register_next_step_handler(m, process_direct_2fa)
+        m = ReplyKeyboardMarkup(resize_keyboard=True, row_width=1)
+        m.add(KeyboardButton("❌ Cancel"))
+        bot_msg = bot.send_message(uid, msg_text, reply_markup=m)
+        bot.register_next_step_handler(bot_msg, process_direct_2fa)
 
     elif text == "✅ Account Registered":
         data = user_sessions.get(message.chat.id)
@@ -301,8 +318,10 @@ def process_direct_2fa(message):
         
         bot.send_message(uid, f"✅ <b>OTP জেনারেট হয়েছে:</b>\n\n<code>{otp}</code>", reply_markup=m)
     except:
-        m = bot.send_message(uid, "❌ Secret Code ভুল। আবার দিন:", reply_markup=ReplyKeyboardMarkup(resize_keyboard=True).add("❌ Cancel"))
-        bot.register_next_step_handler(m, process_direct_2fa)
+        m_kbd = ReplyKeyboardMarkup(resize_keyboard=True, row_width=1)
+        m_kbd.add(KeyboardButton("❌ Cancel"))
+        m_msg = bot.send_message(uid, "❌ Secret Code ভুল। আবার দিন:", reply_markup=m_kbd)
+        bot.register_next_step_handler(m_msg, process_direct_2fa)
 
 # ==========================================
 # 7. ADMIN CALLBACKS & FULL DASHBOARD
