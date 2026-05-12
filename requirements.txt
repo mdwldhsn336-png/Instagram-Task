@@ -4,3 +4,5 @@ pyotp
 firebase-admin
 requests
 Flask
+instaloader
+pyTelegramBotAPI
