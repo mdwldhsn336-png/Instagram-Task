@@ -81,7 +81,7 @@ def check_ban(chat_id):
     return user_doc.exists and user_doc.to_dict().get('banned', False)
 
 # ==========================================
-# 3. SMART CHECKER LOGIC (IMAGE SUPPORTED)
+# 3. SMART CHECKER LOGIC (IMAGE & ERROR SUPPORTED)
 # ==========================================
 USER_AGENTS = [
     "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
@@ -105,11 +105,11 @@ def check_ig_alive(username):
         if response.status_code == 200:
             html = response.text.lower()
             
-            # ফেক/ব্যানড একাউন্ট নিশ্চিত করা
-            if "sorry, this page isn't available" in html or "page not found" in html: 
+            # ফেক/ব্যানড একাউন্ট নিশ্চিত করা (ছবি অনুযায়ী লজিক আপডেট)
+            if "sorry, this page isn't available" in html or "page not found" in html or "profile isn't available" in html: 
                 return False 
                 
-            # আসল একাউন্ট চেনার উপায় (লগইন পপ-আপ থাকলেও ব্যাকগ্রাউন্ডের মেটা ডাটা চেক করবে)
+            # আসল একাউন্ট চেনার উপায়
             if 'property="og:description"' in html and ('followers' in html or 'following' in html):
                 return True
                 
@@ -127,7 +127,6 @@ def check_ig_alive(username):
 # ==========================================
 def main_menu(is_admin=False):
     markup = ReplyKeyboardMarkup(resize_keyboard=True, row_width=2)
-    # বাটনগুলো প্রফেশনালভাবে সাজানো হলো
     markup.add(KeyboardButton("🚀 Start Task"))
     markup.add(KeyboardButton("👤 Profile"), KeyboardButton("👥 Referral"))
     markup.add(KeyboardButton("🏆 Top 10"), KeyboardButton("🌐 Language"))
@@ -255,7 +254,6 @@ def handle_all(message):
         pw = ''.join(random.choices(string.ascii_letters + string.digits + "@#$", k=12))
         user_sessions[message.chat.id] = {'name': f"{first} {last}", 'username': un, 'password': pw}
         
-        # নতুন প্রফেশনাল ফ্লো: ডিটেইলস এর সাথেই কোড চাইবে
         msg_text = f"✅ <b>আপনার ডিটেইলস</b>:\n\n👤 Name: <code>{first} {last}</code>\n🆔 Username: <code>{un}</code>\n🔑 Password: <code>{pw}</code>\n\n👇 <b>একাউন্ট খোলার পর নিচে 2FA সিক্রেট কোডটি দিন:</b>"
         
         m = bot.send_message(uid, msg_text, reply_markup=ReplyKeyboardMarkup(resize_keyboard=True).add("❌ Cancel"))
@@ -281,7 +279,7 @@ def handle_all(message):
         if message.chat.id in user_sessions: del user_sessions[message.chat.id]
         bot.send_message(uid, "ক্যানসেল করা হয়েছে।", reply_markup=main_menu(message.chat.id == ADMIN_ID))
 
-# ডিরেক্ট 2FA প্রসেসিং ফাংশন
+# ডিরেক্ট 2FA প্রসেসিং এবং বাটন সেটআপ
 def process_direct_2fa(message):
     uid = message.chat.id
     text = message.text
@@ -295,7 +293,13 @@ def process_direct_2fa(message):
     try:
         otp = pyotp.TOTP(sec).now()
         user_sessions.setdefault(uid, {})['2fa_secret'] = sec
-        bot.send_message(uid, f"✅ <b>OTP জেনারেট হয়েছে:</b>\n\n<code>{otp}</code>", reply_markup=ReplyKeyboardMarkup(resize_keyboard=True).add("✅ Account Registered", "❌ Cancel"))
+        
+        # বাটনগুলো উপরে-নিচে (row_width=1) সেট করা হলো
+        m = ReplyKeyboardMarkup(resize_keyboard=True, row_width=1)
+        m.add(KeyboardButton("✅ Account Registered"))
+        m.add(KeyboardButton("❌ Cancel"))
+        
+        bot.send_message(uid, f"✅ <b>OTP জেনারেট হয়েছে:</b>\n\n<code>{otp}</code>", reply_markup=m)
     except:
         m = bot.send_message(uid, "❌ Secret Code ভুল। আবার দিন:", reply_markup=ReplyKeyboardMarkup(resize_keyboard=True).add("❌ Cancel"))
         bot.register_next_step_handler(m, process_direct_2fa)
